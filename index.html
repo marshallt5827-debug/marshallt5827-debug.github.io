@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Dashers v2.209</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+        body { 
+            background: #000; 
+            font-family: 'Courier New', Courier, monospace; 
+            overflow: hidden; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh;
+        }
+        #gameContainer {
+            position: relative;
+            width: 800px;
+            height: 450px;
+            margin: auto;
+            border: 4px solid #333;
+            box-shadow: 0 0 20px rgba(0,255,0,0.2);
+        }
+        canvas { background: #0a0a1a; display: block; }
+        .ui-layer {
+            position: absolute;
+            top: 10px; left: 10px; right: 10px;
+            display: flex; justify-content: space-between;
+            color: #fff; font-weight: bold; pointer-events: none;
+            text-shadow: 2px 2px #000; font-size: 16px;
+        }
+        .menu-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.75); display: flex; flex-direction: column;
+            justify-content: center; align-items: center; color: white;
+        }
+        .btn {
+            background: #23b11b; border: 3px solid #fff; color: white;
+            padding: 10px 25px; margin: 8px; font-size: 18px; font-weight: bold;
+            cursor: pointer; border-radius: 5px; box-shadow: 0 4px #12600e;
+            text-shadow: 1px 1px #000;
+        }
+        .btn:active { transform: translateY(2px); box-shadow: 0 2px #12600e; }
+        .btn-blue { background: #1ba3b1; box-shadow: 0 4px #0e5b63; }
+        .btn-red { background: #d12323; box-shadow: 0 4px #7a1212; }
+        .hidden { display: none !important; }
+        .badge {
+            background: #ff9900; padding: 2px 6px; border-radius: 4px; font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="gameContainer">
+    <canvas id="gameCanvas" width="800" height="450"></canvas>
+    
+    <!-- In-Game UI Layer -->
+    <div id="uiLayer" class="ui-layer hidden">
+        <div>ATTEMPTS: <span id="lblAttempts">1</span></div>
+        <div style="text-align: center;">
+            <span id="lblModeBadge" class="badge">NORMAL</span><br>
+            <span id="lblProgress">0%</span>
+        </div>
+        <div>BEST: <span id="lblBest">0%</span></div>
+    </div>
+
+    <!-- Main Menu -->
+    <div id="mainMenu" class="menu-overlay">
+        <h1 style="font-size: 42px; margin-bottom: 5px; color: #23b11b; text-shadow: 3px 3px #000;">WEB DASHERS</h1>
+        <p style="margin-bottom: 20px; font-size: 14px; color: #aaa;">Replicating Update v2.209 Framework</p>
+        <button class="btn" onclick="startGame('normal')">PLAY AUTO-SCROLL (NORMAL)</button>
+        <button class="btn btn-blue" onclick="startGame('platformer')">PLAY PLATFORMER MODE <span class="badge">2.2</span></button>
+        <p style="margin-top: 15px; font-size: 12px; color: #777;">[W/Space/🡡] Jump/Action | [A/D/🡠/🡢] Move in Platformer | [P] Pause</p>
+    </div>
+
+    <!-- Pause / 2.209 Settings Menu -->
+    <div id="pauseMenu" class="menu-overlay hidden" style="pointer-events: auto;">
+        <h2 style="font-size: 32px; margin-bottom: 20px;">PAUSED</h2>
+        <button class="btn" onclick="resumeGame()">RESUME GAME</button>
+        <button class="btn btn-blue" onclick="togglePracticeMode()">TOGGLE PRACTICE MODE: <span id="lblPracticeStatus">OFF</span></button>
+        <div style="margin: 15px 0; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 5px; text-align: center; width: 80%;">
+            <h4 style="margin-bottom: 8px; color: #ff9900;">2.209 QoL Features Panel</h4>
+            <label><input type="checkbox" id="chkDeathMarkers" checked> Enable Visual Death Markers</label><br>
+            <label><input type="checkbox" id="chkHitboxTrail" checked> Show Real-time Hitbox Trail</label>
+        </div>
+        <button class="btn btn-red" onclick="exitToMenu()">EXIT TO MENU</button>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+// Game Config & State
+let gameState = "MENU"; // MENU, PLAYING, PAUSED
+let gameMode = "normal"; // normal (auto-scroll), platformer
+let practiceMode = false;
+let attempts = 1;
+let bestProgress = 0;
+let keys = {};
+let deathMarkers = []; // 2.209 Feature: Store persistent death locations
+let practiceCheckpoints = []; // Stores Practice mode locations
+
+// Physics Consts
+const GRAVITY = 1.4;
+const JUMP_FORCE = -16;
+const PLATFORMER_SPEED = 6;
+const AUTO_SCROLL_SPEED = 6;
+
+// Level Definition (Generated Map)
+let levelWidth = 5000;
+let floorY = 380;
+let blocks = [];
+let spikes = [];
+
+function generateLevel() {
+    blocks = [];
+    spikes = [];
+    // Floor blocks & random obstacles
+    for (let i = 400; i < levelWidth; i += 160) {
+        if (Math.random() > 0.4) {
+            spikes.push({ x: i, y: floorY - 30, w: 30, h: 30 });
+        }
+        if (Math.random() > 0.6) {
+            blocks.push({ x: i + 60, y: floorY - 60, w: 40, h: 40 });
+            if (Math.random() > 0.5) {
+                spikes.push({ x: i + 65, y: floorY - 90, w: 30, h: 30 }); // Stacked spike
+            }
+        }
+    }
+    // End Portal marker
+    blocks.push({ x: levelWidth - 100, y: floorY - 120, w: 40, h: 120, isGoal: true });
+}
+
+// Player Object
+let player = {
+    x: 100, y: 300, w: 30, h: 30,
+    vx: 0, vy: 0,
+    rotation: 0,
+    isGrounded: false,
+    trail: [] // 2.209 Hitbox trail system
+};
+
+// Event Listeners
+window.addEventListener("keydown", (e) => {
+    keys[e.key] = true;
+    keys[e.code] = true;
+    if ((e.key === 'p' || e.key === 'P') && gameState !== "MENU") {
+        gameState === "PAUSED" ? resumeGame() : pauseGame();
+    }
+    if (practiceMode && gameState === "PLAYING") {
+        if (e.key === 'z' || e.key === 'Z') setPracticeCheckpoint();
+        if (e.key === 'x' || e.key === 'X') loadPracticeCheckpoint();
+    }
+});
+window.addEventListener("keyup", (e) => {
+    keys[e.key] = false;
+    keys[e.code] = false;
+});
+
+// UI Helper triggers
+function startGame(mode) {
+    gameMode = mode;
+    gameState = "PLAYING";
+    attempts = 1;
+    bestProgress = 0;
+    deathMarkers = [];
+    practiceCheckpoints = [];
+    practiceMode = false;
+    
+    document.getElementById("mainMenu").classList.add("hidden");
+    document.getElementById("uiLayer").classList.remove("hidden");
+    document.getElementById("lblPracticeStatus").innerText = "OFF";
+    document.getElementById("lblModeBadge").innerText = gameMode.toUpperCase();
+    
+    resetPlayer();
+    generateLevel();
+    gameLoop();
+}
+
+function resetPlayer() {
+    player.x = 100;
+    player.y = floorY - player.h;
+    player.vx = 0;
+    player.vy = 0;
+    player.rotation = 0;
+    player.isGrounded = false;
+    player.trail = [];
+    document.getElementById("lblAttempts").innerText = attempts;
+}
+
+function pauseGame() {
+    gameState = "PAUSED";
+    document.getElementById("pauseMenu").classList.remove("hidden");
+}
+
+function resumeGame() {
+    gameState = "PLAYING";
+    document.getElementById("pauseMenu").classList.add("hidden");
+    gameLoop();
+}
+
+function togglePracticeMode() {
+    practiceMode = !practiceMode;
+    document.getElementById("lblPracticeStatus").innerText = practiceMode ? "ON" : "OFF";
+    document.getElementById("lblModeBadge").innerText = practiceMode ? "PRACTICE" : gameMode.toUpperCase();
+    if (!practiceMode) practiceCheckpoints = [];
+}
+
+function setPracticeCheckpoint() {
+    practiceCheckpoints.push({ x: player.x, y: player.y, rotation: player.rotation });
+}
+
+function loadPracticeCheckpoint() {
+    if (practiceCheckpoints.length > 0) {
+        const cp = practiceCheckpoints[practiceCheckpoints.length - 1];
+        player.x = cp.x;
+        player.y = cp.y;
+        player.rotation = cp.rotation;
+        player.vy = 0;
+    } else {
+        resetPlayer();
+    }
+}
+
+function exitToMenu() {
+    gameState = "MENU";
+    document.getElementById("pauseMenu").classList.add("hidden");
+    document.getElementById("uiLayer").classList.add("hidden");
+    document.getElementById("mainMenu").classList.remove("hidden");
+}
+
+// Rectangular Collision Helper
+function checkCollision(r1, r2) {
+    return r1.x < r2.x + r2.w && r1.x + r1.w > r2.x && r1.y < r2.y + r2.h && r1.y + r1.h > r2.y;
+}
+
+// Handle Crashes & Death Markers
+function playerDeath() {
+    if (document.getElementById("chkDeathMarkers").checked) {
+        deathMarkers.push({ x: player.x, y: player.y });
+    }
+    
+    if (practiceMode && practiceCheckpoints.length > 0) {
+        loadPracticeCheckpoint();
+    } else {
+        attempts++;
+        resetPlayer();
+    }
+}
+
+// Logic tick
+function update() {
+    // 1. Movement Processing
+    if (gameMode === "normal") {
+        player.vx = AUTO_SCROLL_SPEED;
+        if (keys["Space"] || keys["ArrowUp"] || keys["w"]) {
+            if (player.isGrounded) {
+                player.vy = JUMP_FORCE;
+                player.isGrounded = false;
+            }
+        }
+    } else { // Platformer Mode Controls
+        player.vx = 0;
+        if (keys["ArrowLeft"] || keys["a"]) player.vx = -PLATFORMER_SPEED;
+        if (keys["ArrowRight"] || keys["d"]) player.vx = PLATFORMER_SPEED;
+        if ((keys["Space"] || keys["ArrowUp"] || keys["w"]) && player.isGrounded) {
+            player.vy = JUMP_FORCE;
+            player.isGrounded = false;
+        }
+    }
+
+    // Gravity calculation
+    player.vy += GRAVITY;
+    player.x += player.vx;
+    player.y += player.vy;
+
+    // Rotate when mid-air in normal mode to replicate genuine GD dynamics
+    if (gameMode === "normal" && !player.isGrounded) {
+        player.rotation += 0.09;
+    } else if (player.isGrounded) {
+        player.rotation = Math.round(player.rotation / (Math.PI / 2)) * (Math.PI / 2);
+    }
+    //Keep active trail points updated for the 2.209 Hitbox line option
+    if (document.getElementById("chkHitboxTrail").checked) {
+        player.trail.push({ x: player.x + player.w/2, y: player.y + player.h/2 });
+        if (player.trail.length > 25) player.trail.shift();
+    }
+    // Floor Boundary Constraint
+    if (player.y >= floorY - player.h) {
+        player.y = floorY - player.h;
+        player.vy = 0;
+        player.isGrounded = true;
+    }
+    // 2. Objects Intersection Mechanics
+    blocks.forEach(block => {
+        if (checkCollision(player, block)) {
+            if (block.isGoal) {
+                alert("Level Complete! Great run.");
+                exitToMenu();
+            }
+            // Simple Top-down solid physics fallback
+            if (player.vy > 0 && player.y + player.h - player.vy <= block.y) {
+                player.y = block.y - player.h;
+                player.vy = 0;
+                player.isGrounded = true;
+            } else {
+                playerDeath(); // Crashing side metrics
+            }
+        }
+    });
+    spikes.forEach(spike => {
+        if (checkCollision(player, spike)) {
+            playerDeath();
+        }
+    });
+    // Score Calculations
+    let currentPct = Math.min(Math.floor((player.x / levelWidth) * 100), 100);
+    document.getElementById("lblProgress").innerText = currentPct + "%";
+    if (currentPct > bestProgress) {
+        bestProgress = currentPct;
+        document.getElementById("lblBest").innerText = bestProgress + "%";
+    }
+}
+
+// Graphic Rendering
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Dynamic Camera Track relative to Player offset
+    let cameraX = player.x - 150;
+    // Draw background parallax grid lines
+    ctx.strokeStyle = "#111530";
+    ctx.lineWidth = 2;
+    for (let x = -(cameraX % 60); x < canvas.width; x += 60) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+    }
+    // Draw Ground
+    ctx.fillStyle = "#0d0d26";
+    ctx.fillRect(0, floorY, canvas.width, canvas.height - floorY);
+    ctx.strokeStyle = "#00ffff";
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(0, floorY); ctx.lineTo(canvas.width, floorY); ctx.stroke();
+    ctx.save();
+    ctx.translate(-cameraX, 0);
+    // 2.209 Feature: Render persistent Death Markers
+    ctx.fillStyle = "#ff3333";
+    deathMarkers.forEach(marker => {
+        ctx.font = "bold 16px Arial";
+        ctx.fillText("✕", marker.x, marker.y + 10);
+    });
+    // 2.209 Feature: Hitbox/Motion Trail
+    if (document.getElementById("chkHitboxTrail").checked && player.trail.length > 1) {
+        ctx.strokeStyle = "rgba(0, 255, 255, 0.6)";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(player.trail[0].x, player.trail[0].y);
+        for(let i=1; i<player.trail.length; i++) {
+            ctx.lineTo(player.trail[i].x, player.trail[i].y);
+        }
+        ctx.stroke();
+    }
+    // Draw Blocks
+    blocks.forEach(block => {
+        ctx.fillStyle = block.isGoal ? "#ff00ff" : "#3b5273";
+        ctx.fillRect(block.x, block.y, block.w, block.h);
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(block.x, block.y, block.w, block.h);
+    });
+    // Draw Spikes
+    ctx.fillStyle = "#a82e2e";
+    spikes.forEach(spike => {
+        ctx.beginPath();
+        ctx.moveTo(spike.x, spike.y + spike.h);
+        ctx.lineTo(spike.x + spike.w / 2, spike.y);
+        ctx.lineTo(spike.x + spike.w, spike.y + spike.h);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.stroke();
+    });
+    // Draw Player Cube icon
+    ctx.save();
+    ctx.translate(player.x + player.w / 2, player.y + player.h / 2);
+    ctx.rotate(player.rotation);
+    ctx.fillStyle = "#00ffff"; // Icon color primary
+    ctx.fillRect(-player.w / 2, -player.h / 2, player.w, player.h);
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(-player.w / 2, -player.h / 2, player.w, player.h);
+    // Cube Inner decorative face layer
+    ctx.fillStyle = "#ffff00";
+    ctx.fillRect(-player.w / 4, -player.h / 4, player.w / 2, player.h / 2);
+    ctx.restore();
+    ctx.restore();
+}
+
+// Game Core Cycle Loop
+function gameLoop() {
+    if (gameState === "PLAYING") {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+}
+</script>
+</body>
+</html>
